@@ -27,10 +27,13 @@ used in advertising or otherwise to promote the sale, use or other dealings
 in this Software without prior written authorization from The Open Group.
 
 */
+/* $XFree86: xc/programs/xset/xset.c,v 3.30 2003/02/06 18:48:17 dawes Exp $ */
+/* Modified by Stephen so keyboard rate is set using XKB extensions */
 
 #include <stdio.h>
 #include <ctype.h>
-
+#include <stdarg.h>
+#include <stdlib.h>
 #include <X11/Xos.h>
 #include <X11/Xfuncs.h>
 #include <X11/Xlib.h>
@@ -61,6 +64,31 @@ in this Software without prior written authorization from The Open Group.
 #endif
 #endif /* DPMSExtension */
 
+#include <X11/Xos.h>
+#include <X11/Xfuncs.h>
+#include <X11/Xlib.h>
+#include <X11/keysym.h>
+#include <X11/Xproto.h>
+#include <X11/Xutil.h>
+#include <X11/Xmu/Error.h>
+#ifdef MITMISC
+#include <X11/extensions/MITMisc.h>
+#endif
+#ifdef XF86MISC
+#include <X11/extensions/xf86misc.h>
+#include <X11/extensions/xf86mscstr.h>
+#endif
+#ifdef XKB
+#include <X11/XKBlib.h>
+#endif
+#ifdef FONTCACHE
+#include <X11/extensions/fontcache.h>
+#include <X11/extensions/fontcacheP.h>
+
+static Status set_font_cache(Display *, long, long, long);
+static void query_cache_status(Display *dpy);
+#endif
+
 #define ON 1
 #define OFF 0
 
@@ -76,6 +104,15 @@ in this Software without prior written authorization from The Open Group.
 #define PREFER_BLANK 3
 #define ALLOW_EXP 4
 
+#ifdef XF86MISC
+#define KBDDELAY_DEFAULT 500
+#define KBDRATE_DEFAULT 30
+#endif
+#ifdef XKB
+#define XKBDDELAY_DEFAULT 660
+#define XKBDRATE_DEFAULT (1000/40)
+#endif
+
 #define	nextarg(i, argv) \
 	argv[i]; \
 	if (i >= argc) \
@@ -85,18 +122,42 @@ char *progName;
 
 int error_status = 0;
 
-int local_xerror();
+static int is_number(char *arg, int maximum);
+static void set_click(Display *dpy, int percent);
+static void set_bell_vol(Display *dpy, int percent);
+static void set_bell_pitch(Display *dpy, int pitch);
+static void set_bell_dur(Display *dpy, int duration);
+static void set_font_path(Display *dpy, char *path, int special, 
+			  int before, int after);
+static void set_led(Display *dpy, int led, int led_mode);
+static void set_mouse(Display *dpy, int acc_num, int acc_denom, int threshold);
+static void set_saver(Display *dpy, int mask, int value);
+static void set_repeat(Display *dpy, int key, int auto_repeat_mode);
+static void set_pixels(Display *dpy, unsigned long *pixels, caddr_t *colors, 
+		       int numpixels);
+static void set_lock(Display *dpy, Bool onoff);
+static char * on_or_off(int val, int onval, char *onstr, 
+			int offval, char *offstr, char buf[]);
+static void query(Display *dpy);
+static void usage(char *fmt, ...);
+static void error(char *message);
+static int local_xerror(Display *dpy, XErrorEvent *rep);
+#ifdef XF86MISC
+static void set_repeatrate(Display *dpy, int delay, int rate);
+#endif
+#ifdef XKB
+static void xkbset_repeatrate(Display *dpy, int delay, int rate);
+#endif
 
-main(argc, argv)
-int argc;
-char **argv;
+int
+main(int argc, char *argv[])
 {
 register char *arg;
 register int i;
 int percent;
 int acc_num, acc_denom, threshold;
 #ifdef DPMSExtension
-int standby_timeout, suspend_timeout, off_timeout;
+CARD16 standby_timeout, suspend_timeout, off_timeout;
 #endif
 int key, auto_repeat_mode;
 XKeyboardControl values;
@@ -107,6 +168,22 @@ int numpixels = 0;
 char *disp = NULL;
 Display *dpy;
 Bool hasargs = False;
+#ifdef XF86MISC
+int miscpresent = 1;
+int major, minor;
+#else
+int miscpresent = 0;
+#endif
+#ifdef XKB
+int xkbpresent = 1;
+int xkbmajor = XkbMajorVersion, xkbminor = XkbMinorVersion;
+int xkbopcode, xkbevent, xkberror;
+#else
+int xkbpresent = 0;
+#endif
+#ifdef FONTCACHE
+long himark, lowmark, balance;
+#endif
 
 progName = argv[0];
 for (i = 1; i < argc; i++) {
@@ -215,6 +292,65 @@ for (i = 1; i < argc; ) {
 	  XMITMiscSetBugMode(dpy, False);
       else
 	  fprintf(stderr, "server does not have extension for -bc option\n");
+  }
+#endif
+#ifdef FONTCACHE
+  else if (strcmp(arg, "fc") == 0) {
+      int dummy;
+      FontCacheSettings cs;
+      if (FontCacheQueryExtension(dpy, &dummy, &dummy)) {
+	  FontCacheGetCacheSettings(dpy, &cs);
+	  himark = cs.himark / 1024;
+	  lowmark = cs.lowmark / 1024;
+	  balance = cs.balance;
+	  if (i >= argc) {
+	      /* Set to server's values, and clear all cache in side effect */
+	      set_font_cache(dpy, himark, lowmark, balance);
+	      break;
+	  }
+	  arg = nextarg(i, argv);
+	  if (is_number(arg, 32767)) {	/* If hi-mark is given: */
+	      himark = atoi(arg);
+	      i++;
+	      if (himark <= 0) {
+		  usage("hi-mark must be greater than 0", NULL);
+	      }
+	      if (i >= argc) {
+		  lowmark = (himark * 70) / 100;
+		  set_font_cache(dpy, himark, lowmark, balance);
+		  break;
+	      }
+	      arg = nextarg(i, argv);
+	      if (is_number(arg, 32767)) {	/* If low-mark is given: */
+		  lowmark = atoi(arg);
+		  i++;
+		  if (lowmark <= 0) {
+		      usage("low-mark must be greater than 0", NULL);
+		  }
+		  if (himark <= lowmark) {
+		      usage("hi-mark must be greater than low-mark", NULL);
+		  }
+		  if (i >= argc) {
+		      set_font_cache(dpy, himark, lowmark, balance);
+		      break;
+		  }
+		  arg = nextarg(i, argv);
+		  if (is_number(arg, 90)) {
+		      balance = atoi(arg);
+		      i++;
+		      if (!(10 <= balance && balance <= 90)) {
+			  usage("balance must be 10 to 90\n");
+		      }
+		      set_font_cache(dpy, himark, lowmark, balance);
+		  }
+	      }
+	  } else if (strcmp(arg, "s") == 0 || strcmp(arg, "status") == 0) {
+	      /* display cache status */
+	      query_cache_status(dpy);
+	  }
+      } else {
+	  fprintf(stderr, "server does not have extension for fc option\n");
+      }
   }
 #endif
   else if (strcmp(arg, "fp") == 0) {	       /* set font path */
@@ -351,15 +487,15 @@ for (i = 1; i < argc; ) {
 	  }
 	  arg = argv[i];
 	  if (*arg >= '0' && *arg <= '9') {
-	      sscanf(arg, "%d", &standby_timeout);
+	      sscanf(arg, "%hd", &standby_timeout);
 	      i++;
 	      arg = argv[i];
 	      if ((arg)&&(*arg >= '0' && *arg <= '9')) {
-		  sscanf(arg, "%d", &suspend_timeout);
+		  sscanf(arg, "%hd", &suspend_timeout);
 		  i++;
 		  arg = argv[i];
 		  if ((arg)&&(*arg >= '0' && *arg <= '9')) {
-		      sscanf(arg, "%d", &off_timeout);
+		      sscanf(arg, "%hd", &off_timeout);
 		      i++;
 		      arg = argv[i];
 		  }
@@ -398,7 +534,7 @@ for (i = 1; i < argc; ) {
 	       *
 	       * On OS/2, use _sleep2()
 	       */
-#ifdef  SVR4
+#ifdef SVR4
 # ifdef sun
 /* Anything to avoid linking with -lposix4 */
 #  define Usleep(us) { \
@@ -420,7 +556,7 @@ for (i = 1; i < argc; ) {
 #  define Usleep(us) usleep((us))
 # endif
 #endif
-#ifdef __EMX__
+#ifdef __UNIXOS2__
 # define Usleep(us) _sleep2((us / 1000 > 0) ? us / 1000 : 1)
 #endif
 #ifdef WIN32
@@ -433,6 +569,7 @@ for (i = 1; i < argc; ) {
 #  define Usleep(us) usleep((us))
 # endif
 #endif
+
 	      if (strcmp(arg, "on") == 0) {
 		  DPMSEnable(dpy);
 		  DPMSForceLevel(dpy, DPMSModeOn);
@@ -540,22 +677,73 @@ for (i = 1; i < argc; ) {
     set_repeat(dpy, key, auto_repeat_mode);
   } 
   else if (strcmp(arg, "r") == 0) {         /* Turn on one or all autorepeats */
-    auto_repeat_mode = ON;
-    key = ALL;          /* None specified */
-    arg = argv[i];
-    if (i < argc)
+   auto_repeat_mode = ON;
+   key = ALL;          /* None specified */
+   arg = argv[i];
+   if (i < argc) {
     if (strcmp(arg, "on") == 0) {
       i++;
     } 
-    else if (strcmp(arg, "off") == 0) {       /*  ...except in this case. */
+    else if (strcmp(arg, "off") == 0) {       /*  ...except in this case */
       auto_repeat_mode = OFF;
       i++;
     }
+#if defined(XF86MISC) || defined(XKB)
+    else if (strcmp(arg, "rate") == 0) {       /*  ...or this one. */
+      int delay = 0, rate = 0;
+      int rate_set = 0;
+#ifdef XF86MISC
+      if (XF86MiscQueryVersion(dpy, &major, &minor)) {
+        delay=KBDDELAY_DEFAULT, rate=KBDRATE_DEFAULT;
+      } else {
+        miscpresent = 0;
+      }
+#endif
+#ifdef XKB
+      if (XkbQueryExtension(dpy, &xkbopcode, &xkbevent, &xkberror, &xkbmajor,
+				&xkbminor)) {
+        delay=XKBDDELAY_DEFAULT, rate=XKBDRATE_DEFAULT;
+      } else {
+        xkbpresent = 0;
+      }
+#endif
+      if (!miscpresent && !xkbpresent)
+        fprintf(stderr,
+            "server does not have extension for \"r rate\" option\n");
+      i++;
+      arg = argv[i];
+      if (i < argc) {
+        if (is_number(arg, 10000) && atoi(arg)>0) {
+	  delay = atoi(arg);
+	  i++;
+          arg = argv[i];
+	  if (i < argc) {
+            if (is_number(arg, 255) && atoi(arg)>0) {
+	      rate = atoi(arg);
+	      i++;
+            }
+          }
+        }
+      }
+#ifdef XKB
+      if (xkbpresent) {
+        xkbset_repeatrate(dpy, delay, 1000/rate);
+	rate_set = 1;
+      }
+#endif
+#ifdef XF86MISC
+      if (miscpresent && !rate_set) {
+        set_repeatrate(dpy, delay, rate);
+      }
+#endif
+    }
+#endif
     else if (is_number(arg, 255)) {
       key = atoi(arg);
       i++;
-  } 
-    set_repeat(dpy, key, auto_repeat_mode);
+    }
+   } 
+   set_repeat(dpy, key, auto_repeat_mode);
   } 
   else if (strcmp(arg, "p") == 0) {
     if (i + 1 >= argc)
@@ -593,10 +781,8 @@ XCloseDisplay (dpy);
 exit(error_status);    /*  Done.  We can go home now.  */
 }
 
-
-is_number(arg, maximum)
-	char *arg;
-	int maximum;
+static int
+is_number(char *arg, int maximum)
 {
 	register char *p;
 
@@ -610,9 +796,8 @@ is_number(arg, maximum)
 
 /*  These next few functions do the real work (xsetting things).
  */
-set_click(dpy, percent)
-Display *dpy;
-int percent;
+static void
+set_click(Display *dpy, int percent)
 {
 XKeyboardControl values;
 XKeyboardState kbstate;
@@ -630,9 +815,8 @@ if (percent == DEFAULT_ON) {
 return;
 }
 
-set_bell_vol(dpy, percent)
-Display *dpy;
-int percent;
+static void
+set_bell_vol(Display *dpy, int percent)
 {
 XKeyboardControl values;
 XKeyboardState kbstate;
@@ -650,9 +834,8 @@ if (percent == DEFAULT_ON) {
 return;
 }
 
-set_bell_pitch(dpy, pitch)
-Display *dpy;
-int pitch;
+static void
+set_bell_pitch(Display *dpy, int pitch)
 {
 XKeyboardControl values;
 values.bell_pitch = pitch;
@@ -660,9 +843,8 @@ XChangeKeyboardControl(dpy, KBBellPitch, &values);
 return;
 }
 
-set_bell_dur(dpy, duration)
-Display *dpy;
-int duration;
+static void
+set_bell_dur(Display *dpy, int duration)
 {
 XKeyboardControl values;
 values.bell_duration = duration;
@@ -681,11 +863,8 @@ return;
  *	   1      0	FontPath := path + current
  *	   0      1	FontPath := current + path
  */
-
-set_font_path(dpy, path, special, before, after)
-    Display *dpy;
-    char *path;
-    int special, before, after;
+static void
+set_font_path(Display *dpy, char *path, int special, int before, int after)
 {
     char **directoryList = NULL; int ndirs = 0;
     char **currentList = NULL; int ncurrent = 0;
@@ -818,10 +997,8 @@ set_font_path(dpy, path, special, before, after)
     return;
 }
 
-
-set_led(dpy, led, led_mode)
-Display *dpy;
-int led, led_mode;
+static void
+set_led(Display *dpy, int led, int led_mode)
 {
   XKeyboardControl values;
   values.led_mode = led_mode;
@@ -835,9 +1012,8 @@ int led, led_mode;
   return;
 }
 
-set_mouse(dpy, acc_num, acc_denom, threshold)
-Display *dpy;
-int acc_num, acc_denom, threshold;
+static void
+set_mouse(Display *dpy, int acc_num, int acc_denom, int threshold)
 {
 int do_accel = True, do_threshold = True;
 
@@ -855,9 +1031,8 @@ XChangePointerControl(dpy, do_accel, do_threshold, acc_num,
 return;
 }
 
-set_saver(dpy, mask, value)
-Display *dpy;
-int mask, value;
+static void
+set_saver(Display *dpy, int mask, int value)
 {
   int timeout, interval, prefer_blank, allow_exp;
   XGetScreenSaver(dpy, &timeout, &interval, &prefer_blank, 
@@ -883,9 +1058,8 @@ int mask, value;
   return;
 }
 
-set_repeat(dpy, key, auto_repeat_mode)
-Display *dpy;
-int key, auto_repeat_mode;
+static void
+set_repeat(Display *dpy, int key, int auto_repeat_mode)
 {
   XKeyboardControl values;
   values.auto_repeat_mode = auto_repeat_mode;
@@ -899,11 +1073,36 @@ int key, auto_repeat_mode;
   return;
 }
 
-set_pixels(dpy, pixels, colors, numpixels)
-Display *dpy;
-unsigned long *pixels;
-caddr_t *colors;
-int numpixels;
+#ifdef XF86MISC
+static void 
+set_repeatrate(Display *dpy, int delay, int rate)
+{
+  XF86MiscKbdSettings values;
+
+  XF86MiscGetKbdSettings(dpy, &values);
+  values.delay = delay;
+  values.rate = rate;
+  XF86MiscSetKbdSettings(dpy, &values);
+  return;
+}
+#endif
+
+#ifdef XKB
+static void 
+xkbset_repeatrate(Display *dpy, int delay, int interval)
+{
+  XkbDescPtr xkb = XkbAllocKeyboard();
+  if (!xkb)
+    return;
+  XkbGetControls(dpy, XkbRepeatKeysMask, xkb);
+  xkb->ctrls->repeat_delay = delay;
+  xkb->ctrls->repeat_interval = interval;
+  XkbSetControls(dpy, XkbRepeatKeysMask, xkb);
+}
+#endif
+
+static void
+set_pixels(Display *dpy, unsigned long *pixels, caddr_t *colors, int numpixels)
 {
   XColor def;
   int scr = DefaultScreen (dpy);
@@ -919,7 +1118,7 @@ int numpixels;
   vip = XGetVisualInfo (dpy, VisualIDMask, &viproto, &nvisuals);
   if (!vip) {
       fprintf (stderr, "%s: Can't get visual for visualID 0x%x\n",
-	       progName, viproto.visualid);
+	       progName, (unsigned int)viproto.visualid);
       return;
   }
 
@@ -969,25 +1168,43 @@ int numpixels;
   return;
 }
 
-set_lock(dpy, onoff)
-Display *dpy;
-Bool onoff;
+static void
+set_lock(Display *dpy, Bool onoff)
 {
   XModifierKeymap *mods;
   mods = XGetModifierMapping(dpy);
 
   if (onoff)
-    mods = XInsertModifiermapEntry(mods, XK_Caps_Lock, LockMapIndex);
+    mods = XInsertModifiermapEntry(mods, (KeyCode) XK_Caps_Lock, LockMapIndex);
   else
-    mods = XDeleteModifiermapEntry(mods, XK_Caps_Lock, LockMapIndex);
+    mods = XDeleteModifiermapEntry(mods, (KeyCode) XK_Caps_Lock, LockMapIndex);
   XSetModifierMapping(dpy, mods);
   return;
 }
 
-char *on_or_off (val, onval, onstr, offval, offstr, buf)
-    int val, onval, offval;
-    char *onstr, *offstr;
-    char buf[];
+#ifdef FONTCACHE
+static Status
+set_font_cache(dpy, himark, lowmark, balance)
+    Display *dpy;
+    long himark;
+    long lowmark;
+    long balance;
+{
+    FontCacheSettings cs;
+    Status status;
+
+    cs.himark = himark * 1024;
+    cs.lowmark = lowmark * 1024;
+    cs.balance = balance;
+    status = FontCacheChangeCacheSettings(dpy, &cs);
+
+    return status;
+}
+#endif
+
+static char *
+on_or_off(int val, int onval, char *onstr, 
+	  int offval, char *offstr, char buf[])
 {
     if (val == onval) 
       return onstr;
@@ -1003,13 +1220,21 @@ char *on_or_off (val, onval, onstr, offval, offstr, buf)
 /*  This is the information-getting function for telling the user what the
  *  current "xsettings" are.
  */
-query(dpy)
-Display *dpy;
+static void
+query(Display *dpy)
 {
 int scr = DefaultScreen (dpy);
 XKeyboardState values;
 int acc_num, acc_denom, threshold;
 int timeout, interval, prefer_blank, allow_exp;
+#ifdef XF86MISC
+XF86MiscKbdSettings kbdinfo;
+#endif
+#ifdef XKB
+XkbDescPtr xkb;
+int xkbmajor = XkbMajorVersion, xkbminor = XkbMinorVersion;
+int xkbopcode, xkbevent, xkberror;
+#endif
 char **font_path; int npaths;
 int i, j;
 char buf[20];				/* big enough for 16 bit number */
@@ -1024,6 +1249,21 @@ printf ("  auto repeat:  %s    key click percent:  %d    LED mask:  %08lx\n",
 	on_or_off (values.global_auto_repeat,
 		   AutoRepeatModeOn, "on", AutoRepeatModeOff, "off", buf),
 	values.key_click_percent, values.led_mask);
+#ifdef XKB
+if (XkbQueryExtension(dpy, &xkbopcode, &xkbevent, &xkberror, &xkbmajor, &xkbminor)
+    && (xkb = XkbAllocKeyboard()) != NULL
+    && XkbGetControls(dpy, XkbRepeatKeysMask, xkb) == Success)
+  printf ("  auto repeat delay:  %d    repeat rate:  %d\n",
+          xkb->ctrls->repeat_delay,  1000/xkb->ctrls->repeat_interval);
+#ifdef XF86MISC
+else
+#endif
+#endif
+#ifdef XF86MISC
+if (XF86MiscGetKbdSettings(dpy, &kbdinfo))
+  printf ("  auto repeat delay:  %d    repeat rate:  %d\n",
+          kbdinfo.delay, kbdinfo.rate);
+#endif
 printf ("  auto repeating keys:  ");
 for (i = 0; i < 4; i++) {
     if (i) printf ("                        ");
@@ -1049,7 +1289,7 @@ printf ("allow exposures:  %s\n",
 printf ("  timeout:  %d    cycle:  %d\n", timeout, interval);
 
 printf ("Colors:\n");
-printf ("  default colormap:  0x%lx    BlackPixel:  %d    WhitePixel:  %d\n",
+printf ("  default colormap:  0x%lx    BlackPixel:  %ld    WhitePixel:  %ld\n",
 	DefaultColormap (dpy, scr), 
 	BlackPixel (dpy, scr), WhitePixel (dpy, scr));
 
@@ -1090,26 +1330,26 @@ if (npaths) {
 		  standby, suspend, off);
 	  DPMSInfo(dpy, &state, &onoff);
 	  if (onoff) {
-	      printf("  DPMS is enabled\n");
+	      printf("  DPMS is Enabled\n");
 	      switch (state) {
 		  case DPMSModeOn:
-		       printf("  Monitor is on\n");
+		       printf("  Monitor is On\n");
 		       break;
 		  case DPMSModeStandby:
-		       printf("  Monitor is in standby\n");
+		       printf("  Monitor is in Standby\n");
 		       break;
 		  case DPMSModeSuspend:
-		       printf("  Monitor is in suspend\n");
+		       printf("  Monitor is in Suspend\n");
 		       break;
 		  case DPMSModeOff:
-		       printf("  Monitor is off\n");
+		       printf("  Monitor is Off\n");
 		       break;
 		  default:
 		       printf("  Unrecognized response from server\n");
 	      }
 	  }
 	  else
-	      printf("  DPMS is disabled\n");
+	      printf("  DPMS is Disabled\n");
           }
 	  else
 	      printf ("  Display is not capable of DPMS\n");  
@@ -1119,21 +1359,108 @@ if (npaths) {
       }
 }
 #endif
+#ifdef FONTCACHE
+{
+    int dummy;
+    FontCacheSettings cs;
+    int himark, lowmark, balance;
+
+    printf("Font cache:\n");
+    if (FontCacheQueryExtension(dpy, &dummy, &dummy)) {
+	if (FontCacheGetCacheSettings(dpy, &cs)) {
+	    himark = cs.himark / 1024;
+	    lowmark = cs.lowmark / 1024;
+	    balance = cs.balance;
+	    printf("  hi-mark (KB): %d  low-mark (KB): %d  balance (%%): %d\n",
+		   himark, lowmark, balance);
+	}
+    } else {
+	printf("  Server does not have the FontCache Extension\n");
+    }
+}
+#endif
+#ifdef XF86MISC
+{
+    int dummy;
+    int maj, min;
+    XF86MiscFilePaths paths;
+
+    if (XF86MiscQueryExtension(dpy, &dummy, &dummy) &&
+	XF86MiscQueryVersion(dpy, &maj, &min) &&
+	((maj > 0) || (maj == 0 && min >= 7)) && 
+	XF86MiscGetFilePaths(dpy, &paths)) {
+	printf("File paths:\n");
+	printf("  Config file:  %s\n", paths.configfile);
+	printf("  Modules path: %s\n", paths.modulepath);
+	printf("  Log file:     %s\n", paths.logfile);
+    }
+}
+#endif
 
 return;
 }
 
+#ifdef FONTCACHE
+/*
+ *  query_cache_status()
+ *
+ *  This is the information-getting function for telling the user what the
+ *  current settings and statistics are.
+ */
+static void
+query_cache_status(dpy)
+    Display *dpy;
+{
+    int dummy;
+    FontCacheSettings cs;
+    FontCacheStatistics cstats;
+    int himark, lowmark, balance;
+
+    if (FontCacheQueryExtension(dpy, &dummy, &dummy)) {
+	if (FontCacheGetCacheSettings(dpy, &cs)) {
+	    printf("font cache settings:\n");
+	    himark = cs.himark / 1024;
+	    lowmark = cs.lowmark / 1024;
+	    balance = cs.balance;
+	    printf("  hi-mark (KB): %d  low-mark (KB): %d  balance (%%): %d\n",
+		   himark, lowmark, balance);
+	}
+	if (FontCacheGetCacheStatistics(dpy, &cstats)) {
+	    printf("font cache statistics:\n");
+	    printf("   cache purged: %ld\n", cstats.purge_runs);
+	    printf("   cache status: %ld\n", cstats.purge_stat);
+	    printf("  cache balance: %ld\n", cstats.balance);
+	    printf("font cache entry statistics:\n");
+	    printf("      hits: %ld\n", cstats.f.hits);
+	    printf("  misshits: %ld\n", cstats.f.misshits);
+	    printf("    purged: %ld\n", cstats.f.purged);
+	    printf("     usage: %ld\n", cstats.f.usage);
+	    printf("large bitmap cache entry statistics:\n");
+	    printf("      hits: %ld\n", cstats.v.hits);
+	    printf("  misshits: %ld\n", cstats.v.misshits);
+	    printf("    purged: %ld\n", cstats.v.purged);
+	    printf("     usage: %ld\n", cstats.v.usage);
+	}
+    } else {
+	printf("Server does not have the FontCache Extension\n");
+    }
+}
+#endif
 
 /*  This is the usage function */
 
-usage (fmt, arg)
-    char *fmt;
-    char *arg;
+static void
+usage(char *fmt, ...)
 {
+    va_list ap;
+
     if (fmt) {
 	fprintf (stderr, "%s:  ", progName);
-	fprintf (stderr, fmt, arg);
+	va_start(ap, fmt);
+	vfprintf (stderr, fmt, ap);
+	va_end(ap);
 	fprintf (stderr, "\n\n");
+	
     }
 
     fprintf (stderr, "usage:  %s [-display host:dpy] option ...\n", progName);
@@ -1159,8 +1486,17 @@ usage (fmt, arg)
     fprintf (stderr, "\t      force standby \n");
     fprintf (stderr, "\t      force suspend \n");
     fprintf (stderr, "\t      force off \n");
+    fprintf (stderr, "\t      force on \n");
     fprintf (stderr, "\t      (also implicitly enables DPMS features) \n");
     fprintf (stderr, "\t      a timeout value of zero disables the mode \n");
+#endif
+#ifdef FONTCACHE
+    fprintf (stderr, "    To control font cache:\n");
+    fprintf (stderr, "\t fc [hi-mark [low-mark [balance]]]\n");
+    fprintf (stderr, "\t    both mark values spcecified in KB\n");
+    fprintf (stderr, "\t    balance value spcecified in percent (10 - 90)\n");
+    fprintf (stderr, "    Show font cache statistics:\n");
+    fprintf (stderr, "\t fc s\n");
 #endif
     fprintf (stderr, "    To set the font path:\n" );
     fprintf (stderr, "\t fp= path[,path...]\n" );
@@ -1182,6 +1518,9 @@ usage (fmt, arg)
     fprintf (stderr, "    To turn auto-repeat off or on:\n");
     fprintf (stderr, "\t-r [keycode]        r off\n");
     fprintf (stderr, "\t r [keycode]        r on\n");
+#if defined(XF86MISC) || defined(XKB)
+    fprintf (stderr, "\t r rate [delay [rate]]\n");
+#endif
     fprintf (stderr, "    For screen-saver control:\n");
     fprintf (stderr, "\t s [timeout [cycle]]  s default    s on\n");
     fprintf (stderr, "\t s blank              s noblank    s off\n");
@@ -1191,21 +1530,20 @@ usage (fmt, arg)
     exit(0);
 }
 
-error( message )
-    char *message;
+static void
+error(char *message)
 {
     fprintf( stderr, "%s: %s\n", progName, message );
     exit( 1 );
 }
 
 
-int local_xerror (dpy, rep)
-    Display *dpy;
-    XErrorEvent *rep;
+static int 
+local_xerror(Display *dpy, XErrorEvent *rep)
 {
     if (rep->request_code == X_SetFontPath && rep->error_code == BadValue) {
 	fprintf(stderr,
-		"%s:  bad font path element (#%d), possible causes are:\n",
+		"%s:  bad font path element (#%ld), possible causes are:\n",
 		progName, rep->resourceid);
 	fprintf(stderr,"    Directory does not exist or has wrong permissions\n");
 	fprintf(stderr,"    Directory missing fonts.dir\n");

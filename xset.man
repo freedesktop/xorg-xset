@@ -22,7 +22,10 @@
 .\" not be used in advertising or otherwise to promote the sale, use or
 .\" other dealings in this Software without prior written authorization
 .\" from The Open Group.
-.TH XSET 1 "Release 6.4" "X Version 11"
+.\" 
+.\" $XFree86: xc/programs/xset/xset.man,v 3.15 2002/11/12 23:53:35 dawes Exp $
+.\" 
+.TH XSET 1 __xorgversion__
 .SH NAME
 xset - user preference utility for X
 .SH SYNOPSIS
@@ -31,11 +34,12 @@ xset - user preference utility for X
 [-b] [b on/off] [b [\fIvolume\fP [\fIpitch\fP [\fIduration\fP]]]
 [[-]bc]
 [-c] [c on/off] [c [\fIvolume\fP]]
+[[+-]dpms] [dpms \fIstandby\fP [\fI suspend\fP [\fI off\fP]]] [dpms force standby/suspend/off/on]
 [[-+]fp[-+=] \fIpath\fP[,\fIpath\fP[,...]]] [fp default] [fp rehash]
 [[-]led [\fIinteger\fP]] [led on/off]
 [m[ouse] [\fIaccel_mult\fP[/\fIaccel_div\fP] [\fIthreshold\fP]]] [m[ouse] default]
 [p \fIpixel\fP \fIcolor\fP]
-[[-]r [keycode]] [r on/off]
+[[-]r [keycode]] [r on/off] [r rate \fIdelay\fP [\fIrate\fP]]
 [s [\fIlength\fP [\fIperiod\fP]]] [s blank/noblank]
 [s expose/noexpose] [s on/off] [s default] [s activate] [s reset]
 [q]
@@ -45,7 +49,7 @@ This program is used to set various user preference options of the display.
 .PP
 .TP 8
 .B \-display \fIdisplay\fP
-This option specifies the server to use; see \fIX(1)\fP.
+This option specifies the server to use; see \fIX(__miscmansuffix__)\fP.
 .PP
 .TP 8
 .B b
@@ -91,6 +95,26 @@ indicate volume, as a percentage of the maximum.
 The X server will set
 the volume to the nearest value that the hardware can support.
 .PP
+.TP 8
+.B \-dpms
+The \fB\-dpms\fP option disables DPMS (Energy Star) features.
+.TP 8
+.B +dpms
+The \fB+dpms\fP option enables DPMS (Energy Star) features.
+.TP 8
+.B dpms \fIflags...\fP
+The \fBdpms\fP option allows the DPMS (Energy Star) parameters to be
+set.  The option can take up to three numerical values, or the `force'
+flag followed by a DPMS state.  The `force' flags forces the server
+to immediately switch to the DPMS state specified.  The DPMS state can
+be one of `standby', `suspend', `off', or `on'.  When numerical values are
+given, they set the inactivity period
+(in units of seconds)
+before the three modes are activated.
+The first value given is for the `standby' mode, the second is for the
+`suspend' mode, and the third is for the `off' mode.  Setting these
+values implicitly enables the DPMS features.  A value of zero disables
+a particular mode.
 .TP 8
 .B fp= \fIpath,...\fP
 The \fBfp=\fP sets the font path to the entries given in the path argument.
@@ -169,6 +193,15 @@ If a preceding dash or the 'off' flag is used, autorepeat will be disabled.
 If no parameters or the 'on' flag is used, autorepeat will be enabled.
 If a specific keycode is specified as a parameter, autorepeat for that
 keycode is enabled or disabled.
+If the server supports the XFree86-Misc extension,
+or the XKB extension, then a parameter
+of 'rate' is accepted and should be followed by zero, one or two numeric
+values. The first specifies the delay before autorepeat starts and
+the second specifies the repeat rate.  In the case that the server
+supports the XKB extension, the delay is the number of milliseconds
+before autorepeat starts, and the rate is the number of repeats
+per second.  If the rate or delay is not given, it will be set 
+to the default value.
 .PP
 .TP 8
 .B s
@@ -207,8 +240,10 @@ These settings will be reset to default values when you log out.
 Note that not all X implementations are guaranteed to honor all of these
 options.
 .SH "SEE ALSO"
-X(1), Xserver(1), xmodmap(1), xrdb(1), xsetroot(1)
+X(__miscmansuffix__), Xserver(1), xmodmap(1), xrdb(1), xsetroot(1)
 .SH AUTHOR
 Bob Scheifler, MIT Laboratory for Computer Science
 .br
 David Krikorian, MIT Project Athena (X11 version)
+.br
+XFree86-Misc support added by David Dawes and Joe Moss
