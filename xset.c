@@ -88,7 +88,7 @@ in this Software without prior written authorization from The Open Group.
 static Status set_font_cache(Display *, long, long, long);
 static void query_cache_status(Display *dpy);
 #endif
-#ifdef INCLUDE_XPRINT_SUPPORT
+#ifdef BUILD_PRINTSUPPORT
 #include <X11/extensions/Print.h>
 #endif
 
@@ -206,7 +206,7 @@ dpy = XOpenDisplay(disp);  /*  Open display and check for success */
 if (dpy == NULL) {
   fprintf(stderr, "%s:  unable to open display \"%s\"\n",
 	  argv[0], XDisplayName (disp));
-  exit(1);
+  exit(EXIT_FAILURE);
 }
 XSetErrorHandler (local_xerror);
 for (i = 1; i < argc; ) {
@@ -356,7 +356,7 @@ for (i = 1; i < argc; ) {
       }
   }
 #endif
-#ifdef INCLUDE_XPRINT_SUPPORT
+#ifdef BUILD_PRINTSUPPORT
   else if (strcmp(arg, "rehashprinterlist") == 0) { /* rehash list of printers */
       short dummy;
       if (XpQueryVersion(dpy, &dummy, &dummy)) {
@@ -517,20 +517,20 @@ for (i = 1; i < argc; ) {
 	      {
 		  fprintf(stderr, "illegal combination of values\n");
 		  fprintf(stderr, "  standby time of %d is greater than suspend time of %d\n", standby_timeout, suspend_timeout);
-		  exit(0);
+		  exit(EXIT_FAILURE);
 	      }
 	      if ((off_timeout != 0)&&(suspend_timeout > off_timeout))
 	      {
 		  fprintf(stderr, "illegal combination of values\n");
 		  fprintf(stderr, "  suspend time of %d is greater than off time of %d\n", suspend_timeout, off_timeout);
-		  exit(0);
+		  exit(EXIT_FAILURE);
 	      }
 	      if ((suspend_timeout == 0)&&(off_timeout != 0)&&
 		  (standby_timeout > off_timeout))
 	      {
 		  fprintf(stderr, "illegal combination of values\n");
 		  fprintf(stderr, "  standby time of %d is greater than off time of %d\n", standby_timeout, off_timeout);
-		  exit(0);
+		  exit(EXIT_FAILURE);
 	      }
 	      DPMSEnable(dpy);
 	      DPMSSetTimeouts(dpy, standby_timeout, suspend_timeout, off_timeout);
@@ -948,7 +948,7 @@ set_font_path(Display *dpy, char *path, int special, int before, int after)
 	    fprintf (stderr, 
 		     "%s: internal error, only parsed %d of %d directories.\n",
 		     progName, i, ndirs);
-	    exit (1);
+	    exit (EXIT_FAILURE);
 	}
     }
 	    
@@ -1513,7 +1513,7 @@ usage(char *fmt, ...)
     fprintf (stderr, "    Show font cache statistics:\n");
     fprintf (stderr, "\t fc s\n");
 #endif
-#ifdef INCLUDE_XPRINT_SUPPORT
+#ifdef BUILD_PRINTSUPPORT
     fprintf (stderr, "    To control Xprint features:\n");
     fprintf (stderr, "\t rehashprinterlist      Recomputes the list of available printers\n");
 #endif
@@ -1546,14 +1546,14 @@ usage(char *fmt, ...)
     fprintf (stderr, "\t s expose             s noexpose\n");
     fprintf (stderr, "\t s activate           s reset\n");
     fprintf (stderr, "    For status information:  q\n");
-    exit(0);
+    exit(EXIT_SUCCESS);
 }
 
 static void
 error(char *message)
 {
     fprintf( stderr, "%s: %s\n", progName, message );
-    exit( 1 );
+    exit(EXIT_FAILURE);
 }
 
 
