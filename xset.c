@@ -88,6 +88,9 @@ in this Software without prior written authorization from The Open Group.
 static Status set_font_cache(Display *, long, long, long);
 static void query_cache_status(Display *dpy);
 #endif
+#ifdef INCLUDE_XPRINT_SUPPORT
+#include <X11/extensions/Print.h>
+#endif
 
 #define ON 1
 #define OFF 0
@@ -350,6 +353,16 @@ for (i = 1; i < argc; ) {
 	  }
       } else {
 	  fprintf(stderr, "server does not have extension for fc option\n");
+      }
+  }
+#endif
+#ifdef INCLUDE_XPRINT_SUPPORT
+  else if (strcmp(arg, "rehashprinterlist") == 0) { /* rehash list of printers */
+      short dummy;
+      if (XpQueryVersion(dpy, &dummy, &dummy)) {
+          XpRehashPrinterList(dpy);
+      } else {
+          fprintf(stderr, "server does not have extension for rehashprinterlist option\n");
       }
   }
 #endif
@@ -1499,6 +1512,10 @@ usage(char *fmt, ...)
     fprintf (stderr, "\t    balance value spcecified in percent (10 - 90)\n");
     fprintf (stderr, "    Show font cache statistics:\n");
     fprintf (stderr, "\t fc s\n");
+#endif
+#ifdef INCLUDE_XPRINT_SUPPORT
+    fprintf (stderr, "    To control Xprint features:\n");
+    fprintf (stderr, "\t rehashprinterlist      Recomputes the list of available printers\n");
 #endif
     fprintf (stderr, "    To set the font path:\n" );
     fprintf (stderr, "\t fp= path[,path...]\n" );

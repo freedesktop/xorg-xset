@@ -189,12 +189,16 @@ or an error will result.
 .TP 8
 .B r
 The \fBr\fP option controls the autorepeat.
-If a preceding dash or the 'off' flag is used, autorepeat will be disabled.
-If no parameters or the 'on' flag is used, autorepeat will be enabled.
-If a specific keycode is specified as a parameter, autorepeat for that
-keycode is enabled or disabled.
-If the server supports the XFree86-Misc extension,
-or the XKB extension, then a parameter
+Invoking with "\fB-r\fP", or "\fBr\ off\fP", will disable autorepeat, whereas
+"\fBr\fP", or "\fBr\ on\fP" will enable autorepeat.
+Following the "\fB-r\fP" or "\fBr\fP" option with an integer keycode between 0 and
+255 will disable or enable autorepeat on that key respectively, but only
+if it makes sense for the particular keycode.  Keycodes below 8 are
+not typically valid for this command.  Example: "\fBxset\ -r\ 10\fP" will
+disable autorepeat for the "1" key on the top row of an IBM PC keyboard.
+
+If the server supports the XFree86-Misc extension, or the XKB extension, 
+then a parameter
 of 'rate' is accepted and should be followed by zero, one or two numeric
 values. The first specifies the delay before autorepeat starts and
 the second specifies the repeat rate.  In the case that the server
@@ -247,3 +251,5 @@ Bob Scheifler, MIT Laboratory for Computer Science
 David Krikorian, MIT Project Athena (X11 version)
 .br
 XFree86-Misc support added by David Dawes and Joe Moss
+.br
+Manpage updates added by Mike A. Harris <mharris@redhat.com>
